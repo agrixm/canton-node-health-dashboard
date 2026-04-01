@@ -1,0 +1,98 @@
+version: '3.8'
+
+# This Docker Compose file sets up a complete monitoring stack for a Canton validator node.
+# It includes:
+# - canton-health-agent: The custom Go application that connects to a Canton node's Ledger API
+#                        and exposes health metrics in a Prometheus-compatible format.
+# - Prometheus: A time-series database that scrapes and stores the metrics from the agent.
+# - Grafana: A visualization tool to create dashboards based on the metrics stored in Prometheus.
+#
+# Before running `docker-compose up`, you must:
+# 1. Create a `.env` file in this directory with your Canton node's connection details.
+#    See the `canton-health-agent` service definition for required variables.
+# 2. Ensure the configuration files in `./prometheus` and `./grafana` are correctly set up.
+
+networks:
+  monitoring-net:
+    driver: bridge
+
+volumes:
+  prometheus_data: {}
+  grafana_data: {}
+
+services:
+  #################################################
+  # Canton Health Agent - Exposes Canton Metrics
+  #################################################
+  canton-health-agent:
+    container_name: canton-health-agent
+    # Build the agent from the source code in the ../agent directory.
+    build:
+      context: ..
+      dockerfile: agent/Dockerfile
+    ports:
+      - "8080:8080"
+    # Configuration is passed via environment variables.
+    # Create a `.env` file in this directory with the following content:
+    #
+    # CANTON_PARTICIPANT_HOST=your-canton-node-host.com
+    # CANTON_PARTICIPANT_LEDGER_API_PORT=6865
+    # CANTON_LEDGER_API_TOKEN=your-long-lived-jwt-token
+    # CANTON_VALIDATOR_PARTY_ID=Validator::1220x...
+    # AGENT_SCRAPE_INTERVAL_SECONDS=30
+    #
+    env_file:
+      - .env
+    networks:
+      - monitoring-net
+    restart: unless-stopped
+
+  #################################################
+  # Prometheus - Scrapes and Stores Metrics
+  #################################################
+  prometheus:
+    image: prom/prometheus:v2.51.1
+    container_name: prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/usr/share/prometheus/console_libraries'
+      - '--web.console.templates=/usr/share/prometheus/consoles'
+    volumes:
+      # Mounts the Prometheus configuration file. This file tells Prometheus
+      # where to scrape metrics from (i.e., canton-health-agent:8080).
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+      # Persistent volume for time-series data.
+      - prometheus_data:/prometheus
+    ports:
+      - "9090:9090"
+    networks:
+      - monitoring-net
+    restart: unless-stopped
+    depends_on:
+      - canton-health-agent
+
+  #################################################
+  # Grafana - Visualizes Metrics
+  #################################################
+  grafana:
+    image: grafana/grafana-oss:10.4.1
+    container_name: grafana
+    ports:
+      - "3000:3000"
+    volumes:
+      # Persistent volume for Grafana database and plugins.
+      - grafana_data:/var/lib/grafana
+      # Mounts provisioning configurations for datasources (Prometheus) and dashboards.
+      - ./grafana/provisioning:/etc/grafana/provisioning
+      # Mounts the actual dashboard JSON files from the project's dashboards directory.
+      - ../dashboards:/etc/grafana/dashboards
+    environment:
+      # Default admin user/password. Can be overridden in the .env file.
+      - GF_SECURITY_ADMIN_USER=${GF_ADMIN_USER:-admin}
+      - GF_SECURITY_ADMIN_PASSWORD=${GF_ADMIN_PASSWORD:-admin}
+    networks:
+      - monitoring-net
+    restart: unless-stopped
+    depends_on:
+      - prometheus
