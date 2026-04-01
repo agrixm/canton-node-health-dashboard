@@ -1,0 +1,77 @@
+module HealthCheck where
+
+import DA.Time (Time)
+
+-- Data type to represent the BFT quorum status of a validator node.
+data BftQuorumStatus =
+    QuorumOk
+      -- ^ The node is part of a healthy and functioning BFT quorum.
+  | QuorumDegraded
+      -- ^ The BFT quorum is operational but has lost some members, reducing fault tolerance.
+  | QuorumLost
+      -- ^ The BFT quorum has lost too many members and can no longer reach consensus.
+  deriving (Eq, Show, Ord)
+
+-- On-chain health report submitted periodically (e.g., per epoch) by a validator operator.
+-- This contract serves as a proof of liveness and provides key performance
+-- indicators that can be monitored by the operator or other designated parties.
+-- The presence of this contract on the ledger for a given epoch signals that the
+-- operator's monitoring agent is active.
+template ValidatorHealthReport
+  with
+    operator : Party
+      -- ^ The party representing the validator node operator.
+
+    epoch : Int
+      -- ^ The epoch number for which this report is generated. An epoch can be a
+      -- ^ fixed time duration like an hour or a day.
+
+    reportTimestamp : Time
+      -- ^ The UTC timestamp when the health check was performed and the report was created.
+
+    isHealthy : Bool
+      -- ^ A simple boolean flag indicating the overall health status of the node.
+      -- ^ True if all monitored metrics are within acceptable thresholds.
+
+    uptimePercentage : Decimal
+      -- ^ The percentage of time the node was online and participating during the epoch.
+      -- ^ A value from 0.0 to 100.0.
+
+    syncLagSeconds : Int
+      -- ^ The time lag in seconds between the node's state and the sequencer's latest state.
+      -- ^ A value of 0 indicates the node is fully synchronized.
+
+    sequencingFailures : Int
+      -- ^ The number of failed sequencing requests or transactions during the epoch.
+
+    bftQuorumStatus : BftQuorumStatus
+      -- ^ The current status of the BFT consensus quorum.
+
+    livenessRewardsCollected : Decimal
+      -- ^ The amount of liveness rewards successfully collected during the epoch, if applicable.
+
+    observerParties : [Party]
+      -- ^ A list of parties (e.g., consortium admins, monitoring services) allowed to view this report.
+
+  where
+    signatory operator
+    observer observerParties
+
+    ensure
+      -- Ensure metrics are within logical and expected bounds.
+      uptimePercentage >= 0.0 && uptimePercentage <= 100.0
+      && syncLagSeconds >= 0
+      && sequencingFailures >= 0
+      && livenessRewardsCollected >= 0.0
+
+    -- A contract key ensures that there can be only one health report
+    -- per operator per epoch, making the state easily queryable and preventing duplicates.
+    key (operator, epoch) : (Party, Int)
+    maintainer key._1
+
+    -- Allows the operator to archive an old or superseded report. Exercising this
+    -- consuming choice will remove the contract from the active contract set.
+    choice ArchiveReport : ()
+      controller operator
+      do
+        pure ()
